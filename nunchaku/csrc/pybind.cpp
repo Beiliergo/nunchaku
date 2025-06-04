@@ -1,6 +1,7 @@
 #include "gemm.h"
 #include "gemm88.h"
 #include "flux.h"
+#include "ominiFlux.h"
 #include "sana.h"
 #include "ops.h"
 #include "utils.h"
@@ -94,7 +95,69 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("startDebug", &QuantizedGEMM88::startDebug)
         .def("stopDebug", &QuantizedGEMM88::stopDebug)
         .def("getDebugResults", &QuantizedGEMM88::getDebugResults);
-
+    py::class_<QuantizedOminiFluxModel>(m, "QuantizedOminiFluxModel")
+        .def(py::init<>())
+        .def("init",
+             &QuantizedOminiFluxModel::init,
+             py::arg("use_fp4"),  // Use 4-bit precision for quantization
+             py::arg("offload"),  // Enable layer offloading to CPU
+             py::arg("bf16"),     // Use bfloat16, otherwise float16
+             py::arg("deviceId")) // CUDA device ID
+        .def("set_residual_callback",
+             [](QuantizedOminiFluxModel &self, pybind11::object call_back) {
+                 if (call_back.is_none()) {
+                     self.set_residual_callback(pybind11::function()); // Clear callback if None
+                 } else {
+                     self.set_residual_callback(call_back); // Set the Python callback
+                 }
+             })
+        .def("reset", &QuantizedOminiFluxModel::reset) // Resets the model state
+        .def("load",
+             &QuantizedOminiFluxModel::load,
+             py::arg("path"),
+             py::arg("partial") = false) // Load weights from a file path
+        .def("loadDict",
+             &QuantizedOminiFluxModel::loadDict,
+             py::arg("dict"),
+             py::arg("partial") = false) // Load weights from a Python dictionary (state_dict like)
+        // Defines the main forward pass with all its arguments.
+        .def("forward",
+             &QuantizedOminiFluxModel::forward,
+             py::arg("hidden_states"),         // Image latents
+             py::arg("cond_hidden_states"),    // Conditional latents
+             py::arg("encoder_hidden_states"), // Text encoder latents
+             py::arg("temb"),                  // Time embeddings
+             py::arg("cond_temb"),             // Conditional time embeddings
+             py::arg("rotary_emb_img"),        // Rotary embeddings for image
+             py::arg("rotary_emb_context"),    // Rotary embeddings for text/context
+             py::arg("rotary_emb_single"),     // Rotary embeddings for single/concatenated sequence (later stages)
+             py::arg("rotary_emb_cond"),       // Rotary embeddings for conditional inputs
+             py::arg("controlnet_block_samples")        = py::none(), // Optional ControlNet features for joint blocks
+             py::arg("controlnet_single_block_samples") = py::none(), // Optional ControlNet features for single blocks
+             py::arg("skip_first_layer")                = false)                     // Option to skip the first layer
+        // Defines the forward pass for a single specified layer.
+        .def("forward_layer",
+             &QuantizedOminiFluxModel::forward_layer,
+             py::arg("idx"), // Index of the layer to run
+             py::arg("hidden_states"),
+             py::arg("cond_hidden_states"),
+             py::arg("encoder_hidden_states"),
+             py::arg("temb"),
+             py::arg("cond_temb"),
+             py::arg("rotary_emb_img"),
+             py::arg("rotary_emb_context"),
+             py::arg("rotary_emb_cond"),
+             py::arg("controlnet_block_samples")        = py::none(),
+             py::arg("controlnet_single_block_samples") = py::none())
+        // Exposes the forward method of the first AdaLayerNorm in a specified block (used for caching like TeaCache).
+        .def("norm_one_forward", &QuantizedOminiFluxModel::norm_one_forward)
+        .def("startDebug", &QuantizedOminiFluxModel::startDebug) // Debug utilities
+        .def("stopDebug", &QuantizedOminiFluxModel::stopDebug)
+        .def("getDebugResults", &QuantizedOminiFluxModel::getDebugResults)
+        .def("setLoraScale", &QuantizedOminiFluxModel::setLoraScale) // Sets the scaling factor for LoRA layers
+        .def("setAttentionImpl",
+             &QuantizedOminiFluxModel::setAttentionImpl)  // Chooses attention kernel (e.g., "flashattn2")
+        .def("isBF16", &QuantizedOminiFluxModel::isBF16); // Checks if the model is configured for bfloat16
     m.def_submodule("ops")
         .def("gemm_w4a4", nunchaku::ops::gemm_w4a4)
         .def("attention_fp16", nunchaku::ops::attention_fp16)
